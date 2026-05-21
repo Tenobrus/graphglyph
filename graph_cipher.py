@@ -790,11 +790,23 @@ def write_json(graph: Graph, path: Path) -> None:
     path.write_text(json.dumps(graph_to_json(graph), indent=2) + "\n", encoding="utf-8")
 
 
-def write_svg(graph: Graph, path: Path) -> None:
+def write_svg(
+    graph: Graph,
+    path: Path,
+    *,
+    edge_color: str = "#2730ff",
+    node_color: str = "#f39a18",
+    node_stroke_color: str = "#d67900",
+    background_color: str = "#ffffff",
+) -> None:
     nodes_by_id = {node.id: node for node in graph.nodes}
     line_width = max(0.54, min(graph.width, graph.height) / 760.0)
     nominal_spacing = math.sqrt((graph.width * graph.height) / max(1, len(graph.nodes)))
     node_radius = max(1.35, min(3.35, nominal_spacing * 0.15))
+    edge_color = html.escape(edge_color, quote=True)
+    node_color = html.escape(node_color, quote=True)
+    node_stroke_color = html.escape(node_stroke_color, quote=True)
+    background_color = html.escape(background_color, quote=True)
 
     parts = [
         '<?xml version="1.0" encoding="UTF-8"?>',
@@ -809,8 +821,8 @@ def write_svg(graph: Graph, path: Path) -> None:
             + html.escape(json.dumps({"scheme": SCHEME, "plaintext_stored": False}))
             + "</metadata>"
         ),
-        '  <rect width="100%" height="100%" fill="#ffffff"/>',
-        '  <g id="edges" stroke="#2730ff" stroke-linecap="round">',
+        f'  <rect width="100%" height="100%" fill="{background_color}"/>',
+        f'  <g id="edges" stroke="{edge_color}" stroke-linecap="round">',
     ]
     for edge in graph.edges:
         a = nodes_by_id[edge.u]
@@ -831,7 +843,7 @@ def write_svg(graph: Graph, path: Path) -> None:
     parts.extend(
         [
             "  </g>",
-            f'  <g id="nodes" fill="#f39a18" stroke="#d67900" stroke-width="{line_width * 0.44:.3f}">',
+            f'  <g id="nodes" fill="{node_color}" stroke="{node_stroke_color}" stroke-width="{line_width * 0.44:.3f}">',
         ]
     )
     for node in graph.nodes:
@@ -948,7 +960,14 @@ def encode_command(args: argparse.Namespace) -> int:
     output = Path(args.output)
     if output.suffix.lower() != ".svg":
         raise SystemExit("SVG output path must end in .svg")
-    write_svg(graph, output)
+    write_svg(
+        graph,
+        output,
+        edge_color=args.edge_color,
+        node_color=args.node_color,
+        node_stroke_color=args.node_stroke_color,
+        background_color=args.background_color,
+    )
     if args.json:
         write_json(graph, Path(args.json))
 
@@ -979,6 +998,10 @@ def build_parser() -> argparse.ArgumentParser:
     encode.add_argument("--padding", type=int, default=24, help="extra random padding cells after the packet")
     encode.add_argument("--style-json", help="reference analysis JSON to use as the visual substrate")
     encode.add_argument("--unit-range", type=int, default=2, help="coefficient range N for a,b,c,d in {-N,...,N}")
+    encode.add_argument("--edge-color", default="#2730ff", help="SVG color for graph edges")
+    encode.add_argument("--node-color", default="#f39a18", help="SVG fill color for graph vertices")
+    encode.add_argument("--node-stroke-color", default="#d67900", help="SVG outline color for graph vertices")
+    encode.add_argument("--background-color", default="#ffffff", help="SVG background color")
     encode.add_argument(
         "--variant-strength",
         type=float,

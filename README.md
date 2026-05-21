@@ -36,6 +36,16 @@ python3 graph_cipher.py encode "you are loved immensely" \
 python3 graph_cipher.py decode examples/you_are_loved_immensely.svg
 ```
 
+Colors are presentation-only and do not affect decoding:
+
+```bash
+python3 graph_cipher.py encode "goblins" -o goblins_dark.svg \
+  --edge-color "#7c8cff" \
+  --node-color "#ffd166" \
+  --node-stroke-color "#d08700" \
+  --background-color "#0b1020"
+```
+
 Use `--variant-strength 0` for the exact finite algebraic box. The default is
 `0.75`, which gives more visible variation between texts.
 
