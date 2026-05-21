@@ -41,11 +41,28 @@ Use `--variant-strength 0` for the exact finite algebraic box. The default is
 
 ## Examples
 
-Example PNGs are in `examples/`:
+### You Are Loved Immensely
 
-- `you_are_loved_immensely.png`
-- `meditations_on_moloch.png`
-- `goblins.png`
+[SVG](examples/you_are_loved_immensely.svg) |
+[PNG](examples/you_are_loved_immensely.png)
+
+![you are loved immensely](examples/you_are_loved_immensely.png)
+
+### Goblins
+
+[SVG](examples/goblins.svg) |
+[PNG](examples/goblins.png)
+
+![goblins](examples/goblins.png)
+
+### Meditations On Moloch
+
+Encoded from Scott Alexander's
+[Meditations On Moloch](https://slatestarcodex.com/2014/07/30/meditations-on-moloch/).
+
+[PNG](examples/meditations_on_moloch.png)
+
+![Meditations On Moloch](examples/meditations_on_moloch.png)
 
 The large `meditations_on_moloch.svg` is intentionally not included.
 
