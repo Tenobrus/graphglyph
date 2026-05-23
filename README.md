@@ -46,8 +46,23 @@ python3 graph_cipher.py encode "goblins" -o goblins_dark.svg \
   --background-color "#0b1020"
 ```
 
-Use `--variant-strength 0` for the exact finite algebraic box. The default is
-`0.75`, which gives more visible variation between texts.
+The default `--window seeded --variant-strength 0.75` gives visible variation
+between texts. Use `--window box` for the exact finite algebraic box.
+
+Point-set windows:
+
+```bash
+# Default text-varying glyph window.
+python3 graph_cipher.py encode "text" -o seeded.svg --window seeded
+
+# Sawin/Nature-style bounded complex norm:
+# a,b,c,d in {-N,...,N}, z = a + bi + c rho + d i rho, |z| < R.
+python3 graph_cipher.py encode "text" -o norm.svg \
+  --window norm --unit-range 2 --norm-radius 4
+
+# Exact finite coefficient box with no seeded shape variation.
+python3 graph_cipher.py encode "text" -o box.svg --window box --unit-range 2
+```
 
 ## Examples
 

@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Iterable
 
 
+WINDOW_CHOICES = ("seeded", "norm", "bounded-norm", "box")
 SCHEME = "lattice-bloom-v2"
 MAGIC = b"LBM2"
 VERSION = 2
@@ -173,11 +174,15 @@ def stable_unit(seed: int, *parts: object) -> float:
     return int.from_bytes(digest[:8], "big") / float(1 << 64)
 
 
+def exact_rho_basis() -> list[complex]:
+    rho = complex(-0.5, math.sqrt(3.0) / 2.0)
+    return [1.0 + 0.0j, 1j, rho, 1j * rho]
+
+
 def make_projection_basis(seed: int, variant_strength: float) -> list[complex]:
     strength = max(0.0, min(1.0, variant_strength))
     if strength <= 1e-9:
-        rho = complex(-0.5, math.sqrt(3.0) / 2.0)
-        return [1.0 + 0.0j, 1j, rho, 1j * rho]
+        return exact_rho_basis()
 
     rng = random.Random(seed ^ VARIANT_XOR)
     families = [3, 12]
@@ -252,6 +257,40 @@ def choose_coefficients(
     return [coeffs for _score, _tie_breaker, coeffs in scored[:target_count]]
 
 
+def coefficient_box(range_limit: int, dimension: int) -> list[tuple[int, ...]]:
+    return list(itertools.product(range(-range_limit, range_limit + 1), repeat=dimension))
+
+
+def choose_norm_coefficients(
+    range_limit: int,
+    basis: list[complex],
+    norm_radius: float,
+) -> list[tuple[int, ...]]:
+    if norm_radius <= 0:
+        raise ValueError("--norm-radius must be positive")
+    return [coeffs for coeffs in coefficient_box(range_limit, len(basis)) if abs(project_coeffs(coeffs, basis)) < norm_radius]
+
+
+def choose_window_coefficients(
+    window: str,
+    range_limit: int,
+    seed: int,
+    variant_strength: float,
+    norm_radius: float,
+) -> tuple[list[complex], list[tuple[int, ...]], float]:
+    if window == "seeded":
+        strength = max(0.0, min(1.0, variant_strength))
+        basis = make_projection_basis(seed, strength)
+        return basis, choose_coefficients(range_limit, seed, strength, basis), strength
+    if window in {"norm", "bounded-norm"}:
+        basis = exact_rho_basis()
+        return basis, choose_norm_coefficients(range_limit, basis, norm_radius), 0.0
+    if window == "box":
+        basis = exact_rho_basis()
+        return basis, coefficient_box(range_limit, len(basis)), 0.0
+    raise ValueError(f"unknown coefficient window {window!r}")
+
+
 def unit_step_vectors(basis: list[complex]) -> list[tuple[int, ...]]:
     dimension = len(basis)
     vectors: list[tuple[int, ...]] = []
@@ -268,13 +307,14 @@ def make_unit_distance_substrate(
     range_limit: int,
     unit_px: float,
     seed: int,
+    window: str,
     variant_strength: float,
+    norm_radius: float,
 ) -> tuple[list[Node], set[int], dict[tuple[str, str], float], dict[int, list[int]]]:
-    strength = max(0.0, min(1.0, variant_strength))
-    basis = make_projection_basis(seed, strength)
+    basis, coefficients, visual_strength = choose_window_coefficients(window, range_limit, seed, variant_strength, norm_radius)
     raw_points: list[tuple[float, float, tuple[int, ...]]] = []
     seen: set[tuple[float, float]] = set()
-    for coeffs in choose_coefficients(range_limit, seed, strength, basis):
+    for coeffs in coefficients:
         z = project_coeffs(coeffs, basis)
         x = z.real
         y = z.imag
@@ -304,7 +344,7 @@ def make_unit_distance_substrate(
             if j is None or j <= i:
                 continue
             edge_noise = stable_unit(seed, "edge", coeffs, target) - 0.5
-            add_visual_edge(visual_edges, nodes[i].id, nodes[j].id, 0.54 + edge_noise * 0.22 * strength)
+            add_visual_edge(visual_edges, nodes[i].id, nodes[j].id, 0.54 + edge_noise * 0.22 * visual_strength)
             incident[i].append(j)
             incident[j].append(i)
 
@@ -360,6 +400,8 @@ def build_graph(
     min_cells: int = 120,
     padding: int = 24,
     unit_range: int = 2,
+    window: str = "seeded",
+    norm_radius: float = 4.0,
     variant_strength: float = 0.75,
 ) -> Graph:
     header, tail, seed, _normalized = make_parts(text)
@@ -384,7 +426,9 @@ def build_graph(
             effective_unit_range,
             cell_size,
             seed,
+            window,
             variant_strength,
+            norm_radius,
         )
         if len(round_motif_centers) >= data_cell_count:
             break
@@ -622,6 +666,8 @@ def encode_command(args: argparse.Namespace) -> int:
         min_cells=args.min_cells,
         padding=args.padding,
         unit_range=args.unit_range,
+        window=args.window,
+        norm_radius=args.norm_radius,
         variant_strength=args.variant_strength,
     )
     output = Path(args.output)
@@ -663,6 +709,13 @@ def build_parser() -> argparse.ArgumentParser:
     encode.add_argument("--min-cells", type=int, default=120, help="minimum encoded cells, including padding")
     encode.add_argument("--padding", type=int, default=24, help="extra random padding cells after the packet")
     encode.add_argument("--unit-range", type=int, default=2, help="coefficient range N for a,b,c,d in {-N,...,N}")
+    encode.add_argument(
+        "--window",
+        choices=WINDOW_CHOICES,
+        default="seeded",
+        help="coefficient window: seeded text-varying default, norm/bounded-norm for |z| < R, or box for the exact finite box",
+    )
+    encode.add_argument("--norm-radius", type=float, default=4.0, help="radius R used by --window norm")
     encode.add_argument("--edge-color", default="#2730ff", help="SVG color for graph edges")
     encode.add_argument("--node-color", default="#f39a18", help="SVG fill color for graph vertices")
     encode.add_argument("--node-stroke-color", default="#d67900", help="SVG outline color for graph vertices")
@@ -671,7 +724,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--variant-strength",
         type=float,
         default=0.75,
-        help="seeded visual variation from 0.0 exact box to 1.0 strong polydisc window",
+        help="seeded-mode visual variation from 0.0 exact box to 1.0 strong polydisc window",
     )
     encode.set_defaults(func=encode_command)
 
