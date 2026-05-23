@@ -46,29 +46,30 @@ python3 graph_cipher.py encode "goblins" -o goblins_dark.svg \
   --background-color "#0b1020"
 ```
 
-The default `--window seeded --variant-strength 0.75` gives visible variation
-between texts. Use `--window box` for the exact finite algebraic box.
+The default `--mode glyph --variant-strength 0.75` gives visible variation
+between texts. Encoding has three public generation modes; decoding is the same
+for every mode because the recoverable data is stored in weighted graph edges.
 
-Point-set windows:
+Generation modes:
 
 ```bash
-# Default text-varying glyph window.
-python3 graph_cipher.py encode "text" -o seeded.svg --window seeded
+# 1. Text-varying glyph mode.
+python3 graph_cipher.py encode "text" -o glyph.svg --mode glyph
 
-# Single bounded complex norm:
+# 2. Single bounded complex norm:
 # a,b,c,d in {-N,...,N}, z = a + bi + c rho + d i rho, |z| < R.
 python3 graph_cipher.py encode "text" -o norm.svg \
-  --window norm --unit-range 2 --norm-radius 4
+  --mode norm --unit-range 2 --norm-radius 4
 
-# Two-embedding norm window:
+# 3. Two-embedding norm mode:
 # |a + bi + c rho + d i rho| < R and |a - bi + c rho - d i rho| < R2.
 # R2 defaults to R; set --dual-norm-radius for asymmetric bounds.
 python3 graph_cipher.py encode "text" -o double_norm.svg \
-  --window double-norm --unit-range 4 --norm-radius 4
-
-# Exact finite coefficient box with no seeded shape variation.
-python3 graph_cipher.py encode "text" -o box.svg --window box --unit-range 2
+  --mode double-norm --unit-range 4 --norm-radius 4
 ```
+
+Legacy `--window` names are still accepted as aliases, but `--mode` is the
+stable interface.
 
 ## Examples
 

@@ -27,7 +27,17 @@ from pathlib import Path
 from typing import Iterable
 
 
-WINDOW_CHOICES = ("seeded", "norm", "bounded-norm", "double-norm", "two-norm", "box")
+MODE_CHOICES = ("glyph", "norm", "double-norm")
+LEGACY_WINDOW_CHOICES = ("seeded", "norm", "bounded-norm", "double-norm", "two-norm", "box")
+LEGACY_WINDOW_TO_MODE = {
+    "seeded": "glyph",
+    "norm": "norm",
+    "bounded-norm": "norm",
+    "double-norm": "double-norm",
+    "two-norm": "double-norm",
+    "box": "box",
+}
+BOUNDED_MODES = {"norm", "double-norm"}
 SCHEME = "lattice-bloom-v2"
 MAGIC = b"LBM2"
 VERSION = 2
@@ -64,6 +74,7 @@ class Edge:
 
 @dataclass(frozen=True)
 class Graph:
+    mode: str
     width: float
     height: float
     point_cols: int
@@ -299,29 +310,29 @@ def choose_double_norm_coefficients(
     ]
 
 
-def choose_window_coefficients(
-    window: str,
+def choose_mode_coefficients(
+    mode: str,
     range_limit: int,
     seed: int,
     variant_strength: float,
     norm_radius: float,
     dual_norm_radius: float | None,
 ) -> tuple[list[complex], list[tuple[int, ...]], float]:
-    if window == "seeded":
+    if mode == "glyph":
         strength = max(0.0, min(1.0, variant_strength))
         basis = make_projection_basis(seed, strength)
         return basis, choose_coefficients(range_limit, seed, strength, basis), strength
-    if window in {"norm", "bounded-norm"}:
+    if mode == "norm":
         basis = exact_rho_basis()
         return basis, choose_norm_coefficients(range_limit, basis, norm_radius), 0.0
-    if window in {"double-norm", "two-norm"}:
+    if mode == "double-norm":
         basis = exact_rho_basis()
         second_radius = norm_radius if dual_norm_radius is None else dual_norm_radius
         return basis, choose_double_norm_coefficients(range_limit, basis, norm_radius, second_radius), 0.0
-    if window == "box":
+    if mode == "box":
         basis = exact_rho_basis()
         return basis, coefficient_box(range_limit, len(basis)), 0.0
-    raise ValueError(f"unknown coefficient window {window!r}")
+    raise ValueError(f"unknown mode {mode!r}")
 
 
 def unit_step_vectors(basis: list[complex]) -> list[tuple[int, ...]]:
@@ -340,13 +351,13 @@ def make_unit_distance_substrate(
     range_limit: int,
     unit_px: float,
     seed: int,
-    window: str,
+    mode: str,
     variant_strength: float,
     norm_radius: float,
     dual_norm_radius: float | None,
 ) -> tuple[list[Node], set[int], dict[tuple[str, str], float], dict[int, list[int]]]:
-    basis, coefficients, visual_strength = choose_window_coefficients(
-        window,
+    basis, coefficients, visual_strength = choose_mode_coefficients(
+        mode,
         range_limit,
         seed,
         variant_strength,
@@ -354,7 +365,7 @@ def make_unit_distance_substrate(
         dual_norm_radius,
     )
     if not coefficients:
-        raise ValueError("coefficient window produced no points")
+        raise ValueError("generation mode produced no points")
     raw_points: list[tuple[float, float, tuple[int, ...]]] = []
     seen: set[tuple[float, float]] = set()
     for coeffs in coefficients:
@@ -443,7 +454,7 @@ def build_graph(
     min_cells: int = 120,
     padding: int = 24,
     unit_range: int = 2,
-    window: str = "seeded",
+    mode: str = "glyph",
     norm_radius: float = 4.0,
     dual_norm_radius: float | None = None,
     variant_strength: float = 0.75,
@@ -471,14 +482,14 @@ def build_graph(
             effective_unit_range,
             cell_size,
             seed,
-            window,
+            mode,
             variant_strength,
             norm_radius,
             dual_norm_radius,
         )
         if len(round_motif_centers) >= data_cell_count:
             break
-        if window in {"norm", "bounded-norm", "double-norm", "two-norm"} and len(nodes) == previous_node_count:
+        if mode in BOUNDED_MODES and len(nodes) == previous_node_count:
             raise ValueError(
                 "bounded coefficient window does not have enough high-degree points; "
                 "increase --norm-radius or use fewer data cells"
@@ -531,7 +542,7 @@ def build_graph(
     nodes = [Node(node.id, node.x - min_x + margin, node.y - min_y + margin) for node in nodes]
     width = max(node.x for node in nodes) + margin
     height = max(node.y for node in nodes) + margin
-    return Graph(width, height, point_cols, point_rows, data_cell_count, nodes, visual_edge_list + data_edges)
+    return Graph(mode, width, height, point_cols, point_rows, data_cell_count, nodes, visual_edge_list + data_edges)
 
 
 def graph_to_json(graph: Graph) -> dict:
@@ -543,6 +554,7 @@ def graph_to_json(graph: Graph) -> dict:
         edges.append(item)
     return {
         "scheme": SCHEME,
+        "mode": graph.mode,
         "width": round(graph.width, 3),
         "height": round(graph.height, 3),
         "point_cols": graph.point_cols,
@@ -574,18 +586,19 @@ def write_svg(
     node_color = html.escape(node_color, quote=True)
     node_stroke_color = html.escape(node_stroke_color, quote=True)
     background_color = html.escape(background_color, quote=True)
+    svg_mode = html.escape(graph.mode, quote=True)
 
     parts = [
         '<?xml version="1.0" encoding="UTF-8"?>',
         (
             f'<svg xmlns="http://www.w3.org/2000/svg" width="{graph.width:.1f}" '
             f'height="{graph.height:.1f}" viewBox="0 0 {graph.width:.1f} {graph.height:.1f}" '
-            f'data-scheme="{SCHEME}">'
+            f'data-scheme="{SCHEME}" data-mode="{svg_mode}">'
         ),
         "  <title>Lattice Bloom encoded graph</title>",
         (
             "  <metadata>"
-            + html.escape(json.dumps({"scheme": SCHEME, "plaintext_stored": False}))
+            + html.escape(json.dumps({"scheme": SCHEME, "mode": graph.mode, "plaintext_stored": False}))
             + "</metadata>"
         ),
         f'  <rect width="100%" height="100%" fill="{background_color}"/>',
@@ -704,6 +717,15 @@ def decode_path(path: Path) -> str:
     return decode_scores(scores)
 
 
+def canonical_encode_mode(mode: str | None, legacy_window: str | None) -> str:
+    legacy_mode = LEGACY_WINDOW_TO_MODE.get(legacy_window) if legacy_window else None
+    if legacy_window and legacy_mode is None:
+        raise SystemExit(f"unknown legacy window {legacy_window!r}")
+    if mode and legacy_mode and mode != legacy_mode:
+        raise SystemExit(f"--mode {mode} conflicts with legacy --window {legacy_window}")
+    return mode or legacy_mode or "glyph"
+
+
 def encode_command(args: argparse.Namespace) -> int:
     if args.stdin:
         text = sys.stdin.read()
@@ -712,13 +734,14 @@ def encode_command(args: argparse.Namespace) -> int:
     else:
         raise SystemExit("encode needs TEXT or --stdin")
 
+    mode = canonical_encode_mode(args.mode, args.window)
     graph = build_graph(
         text,
         cell_size=args.cell_size,
         min_cells=args.min_cells,
         padding=args.padding,
         unit_range=args.unit_range,
-        window=args.window,
+        mode=mode,
         norm_radius=args.norm_radius,
         dual_norm_radius=args.dual_norm_radius,
         variant_strength=args.variant_strength,
@@ -763,19 +786,17 @@ def build_parser() -> argparse.ArgumentParser:
     encode.add_argument("--padding", type=int, default=24, help="extra random padding cells after the packet")
     encode.add_argument("--unit-range", type=int, default=2, help="coefficient range N for a,b,c,d in {-N,...,N}")
     encode.add_argument(
-        "--window",
-        choices=WINDOW_CHOICES,
-        default="seeded",
-        help=(
-            "coefficient window: seeded text-varying default, norm/bounded-norm for |z| < R, "
-            "double-norm/two-norm for two embedding bounds, or box for the exact finite box"
-        ),
+        "--mode",
+        choices=MODE_CHOICES,
+        default=None,
+        help="generation mode: glyph, norm for |z| < R, or double-norm for the two embedding bounds",
     )
+    encode.add_argument("--window", choices=LEGACY_WINDOW_CHOICES, help=argparse.SUPPRESS)
     encode.add_argument("--norm-radius", type=float, default=4.0, help="first embedding radius R used by norm windows")
     encode.add_argument(
         "--dual-norm-radius",
         type=float,
-        help="second embedding radius used by --window double-norm; defaults to --norm-radius",
+        help="second embedding radius used by --mode double-norm; defaults to --norm-radius",
     )
     encode.add_argument("--edge-color", default="#2730ff", help="SVG color for graph edges")
     encode.add_argument("--node-color", default="#f39a18", help="SVG fill color for graph vertices")
@@ -785,7 +806,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--variant-strength",
         type=float,
         default=0.75,
-        help="seeded-mode visual variation from 0.0 exact box to 1.0 strong polydisc window",
+        help="glyph-mode visual variation from 0.0 exact box to 1.0 strong polydisc window",
     )
     encode.set_defaults(func=encode_command)
 
