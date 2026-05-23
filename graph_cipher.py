@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import argparse
 import binascii
-import heapq
 import hashlib
 import html
 import itertools
@@ -37,17 +36,8 @@ SEED_LEN = 8
 HEADER_LEN = 4 + 1 + 1 + SEED_LEN + 4
 CRC_LEN = 4
 HEADER_CELLS = HEADER_LEN * 2
-RING_COUNT = 12
 PERMUTE_XOR = 0xC0DEC0DEC0DEC0DE
 LAYOUT_XOR = 0x9E3779B97F4A7C15
-MESH_XOR = 0xD1B54A32D192ED03
-
-CHORD_PAIRS = [
-    ((0, 5), (1, 6)),
-    ((2, 7), (3, 8)),
-    ((4, 9), (5, 10)),
-    ((6, 11), (7, 0)),
-]
 
 DATA_WEAK_WEIGHT = 0.30
 DATA_STRONG_WEIGHT = 0.62
@@ -174,133 +164,6 @@ def add_visual_edge(edges: dict[tuple[str, str], float], u: str, v: str, weight:
     edges[key] = max(edges.get(key, 0.0), weight)
 
 
-def choose_point_grid(point_count: int, point_cols: int | None) -> tuple[int, int]:
-    if point_cols is None:
-        point_cols = max(16, math.ceil(math.sqrt(point_count * 0.943)))
-    point_rows = math.ceil(point_count / point_cols)
-    return point_cols, point_rows
-
-
-def make_point_field(
-    point_count: int,
-    *,
-    point_cols: int | None,
-    spacing: float,
-    seed: int,
-) -> tuple[list[Node], int, int, set[int]]:
-    rng = random.Random(seed ^ LAYOUT_XOR)
-    point_cols, point_rows = choose_point_grid(point_count, point_cols)
-    margin = spacing * 0.64
-    jitter = spacing * 0.030
-    y_step = spacing * 1.025
-    nodes: list[Node] = []
-    for index in range(point_count):
-        row, col = divmod(index, point_cols)
-        x = margin + col * spacing + (row % 2) * spacing * 0.50
-        y = margin + row * y_step
-        x += math.sin(row * 0.77 + col * 0.23) * spacing * 0.018
-        y += math.cos(col * 0.61 - row * 0.18) * spacing * 0.016
-        x += rng.uniform(-jitter, jitter)
-        y += rng.uniform(-jitter, jitter)
-        nodes.append(Node(f"p{index}", x, y))
-
-    max_x = max(node.x for node in nodes)
-    max_y = max(node.y for node in nodes)
-    swirl_centers: list[tuple[float, float, float]] = []
-    for row in range(1, 5):
-        for col in range(1, 5):
-            if rng.random() < 0.72:
-                swirl_centers.append(
-                    (
-                        (col / 5.0) * max_x + rng.uniform(-spacing * 0.55, spacing * 0.55),
-                        (row / 5.0) * max_y + rng.uniform(-spacing * 0.55, spacing * 0.55),
-                        rng.choice([-1.0, 1.0]),
-                    )
-                )
-
-    warped: list[Node] = []
-    for node in nodes:
-        shift_x = 0.0
-        shift_y = 0.0
-        for sx, sy, direction in swirl_centers:
-            dx = node.x - sx
-            dy = node.y - sy
-            distance = math.hypot(dx, dy)
-            if distance < 1e-6:
-                continue
-            influence = math.exp(-((distance / (spacing * 3.15)) ** 2))
-            radial = math.sin(distance / spacing * math.tau * 0.42) * spacing * 0.060 * influence
-            tangent = math.cos(distance / spacing * math.tau * 0.31) * spacing * 0.045 * influence * direction
-            ux = dx / distance
-            uy = dy / distance
-            shift_x += ux * radial - uy * tangent
-            shift_y += uy * radial + ux * tangent
-        warped.append(Node(node.id, node.x + shift_x, node.y + shift_y))
-    nodes = warped
-
-    min_x = min(node.x for node in nodes)
-    min_y = min(node.y for node in nodes)
-    translated = [Node(node.id, node.x - min_x + margin, node.y - min_y + margin) for node in nodes]
-    motif_centers = {
-        index
-        for index in range(point_count)
-        if 1 < divmod(index, point_cols)[0] < point_rows - 2 and 1 < divmod(index, point_cols)[1] < point_cols - 2
-    }
-    return translated, point_cols, point_rows, motif_centers
-
-
-def load_style_template(path: Path) -> tuple[list[Node], set[int], dict[tuple[str, str], float], int, int]:
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    node_items = raw.get("nodes", {}).get("all") or raw.get("nodes", {}).get("sample") or []
-    if not node_items:
-        raise ValueError(f"{path} does not contain extracted nodes; rerun analyze_reference.py")
-
-    nodes = [Node(f"p{index}", float(item["x"]), float(item["y"])) for index, item in enumerate(node_items)]
-    preferred = {
-        int(item["i"])
-        for item in raw.get("degree", {}).get("high_degree_sample", [])
-        if 0 <= int(item["i"]) < len(nodes)
-    }
-    if not preferred:
-        preferred = set(range(min(len(nodes), 120)))
-
-    visual_edges: dict[tuple[str, str], float] = {}
-    for item in raw.get("edges", {}).get("all", []):
-        u_index = int(item["u"])
-        v_index = int(item["v"])
-        if not (0 <= u_index < len(nodes) and 0 <= v_index < len(nodes)):
-            continue
-        coverage = float(item.get("coverage", 0.45))
-        length = float(item.get("length", 40.0))
-        length_bias = 1.0 if length < 55.0 else 0.82
-        weight = max(0.18, min(0.72, (0.18 + coverage * 0.62) * length_bias))
-        add_visual_edge(visual_edges, nodes[u_index].id, nodes[v_index].id, weight)
-
-    image = raw.get("image", {})
-    width = int(image.get("width", 0) or 0)
-    height = int(image.get("height", 0) or 0)
-    return nodes, preferred, visual_edges, width, height
-
-
-def unit_difference_vectors() -> list[tuple[int, int, int, int]]:
-    vectors: list[tuple[int, int, int, int]] = []
-    for da, db, dc, dd in itertools.product(range(-1, 2), repeat=4):
-        if da == db == dc == dd == 0:
-            continue
-        # For z = a + bi + c rho + d i rho and rho = (-1 + sqrt(3)i) / 2,
-        # write 2 Re(z) = R0 + R1 sqrt(3), 2 Im(z) = I0 + I1 sqrt(3).
-        # Unit length is then the exact integer system below.
-        r0 = 2 * da - dc
-        r1 = -dd
-        i0 = 2 * db - dd
-        i1 = dc
-        if r0 * r1 + i0 * i1 != 0:
-            continue
-        if r0 * r0 + 3 * r1 * r1 + i0 * i0 + 3 * i1 * i1 == 4:
-            vectors.append((da, db, dc, dd))
-    return vectors
-
-
 def project_coeffs(coeffs: tuple[int, ...], basis: list[complex]) -> complex:
     return sum(value * direction for value, direction in zip(coeffs, basis))
 
@@ -308,11 +171,6 @@ def project_coeffs(coeffs: tuple[int, ...], basis: list[complex]) -> complex:
 def stable_unit(seed: int, *parts: object) -> float:
     digest = hashlib.sha256(f"{seed}:{parts!r}".encode("utf-8")).digest()
     return int.from_bytes(digest[:8], "big") / float(1 << 64)
-
-
-def angular_distance_mod_pi(a: float, b: float) -> float:
-    diff = abs((a - b + math.pi / 2.0) % math.pi - math.pi / 2.0)
-    return diff
 
 
 def make_projection_basis(seed: int, variant_strength: float) -> list[complex]:
@@ -458,67 +316,6 @@ def make_unit_distance_substrate(
     return nodes, preferred, visual_edges, incident
 
 
-def circularize_neighborhoods(
-    nodes: list[Node],
-    center_indices: list[int],
-    spacing: float,
-    seed: int,
-) -> tuple[list[Node], set[int]]:
-    rng = random.Random(seed ^ 0xA5D7C931E5B85A21)
-    result = list(nodes)
-    protected = set(center_indices)
-    moved: set[int] = set()
-    motif_centers: list[int] = []
-    candidates = list(center_indices)
-    rng.shuffle(candidates)
-    target_motifs = min(30, max(20, len(nodes) // 17))
-    min_center_distance = spacing * 2.35
-
-    for center_index in candidates:
-        center = result[center_index]
-        if any(math.hypot(center.x - result[other].x, center.y - result[other].y) < min_center_distance for other in motif_centers):
-            continue
-        motif_centers.append(center_index)
-        if len(motif_centers) >= target_motifs:
-            break
-
-    for motif_number, center_index in enumerate(motif_centers):
-        center = result[center_index]
-        nearby = [
-            (math.hypot(center.x - node.x, center.y - node.y), index)
-            for index, node in enumerate(result)
-            if index != center_index and index not in protected and index not in moved
-        ]
-        nearby.sort(key=lambda item: item[0])
-        ring_size = rng.randint(5, 6)
-        chosen = [index for _distance, index in nearby[: ring_size * 3]]
-        rng.shuffle(chosen)
-        chosen = chosen[:ring_size]
-        slots = [0, 2, 4, 6, 8, 10]
-        rng.shuffle(slots)
-        slots = sorted(slots[:ring_size])
-        radius = spacing * rng.uniform(0.52, 0.58)
-        phase = rng.uniform(0, math.tau)
-        for index, slot in zip(chosen, slots):
-            angle = phase + slot * math.tau / 12.0
-            target_x = center.x + math.cos(angle) * radius + rng.uniform(-spacing * 0.025, spacing * 0.025)
-            target_y = center.y + math.sin(angle) * radius + rng.uniform(-spacing * 0.025, spacing * 0.025)
-            blend = rng.uniform(0.86, 1.0)
-            original = result[index]
-            result[index] = Node(
-                result[index].id,
-                original.x * (1.0 - blend) + target_x * blend,
-                original.y * (1.0 - blend) + target_y * blend,
-            )
-            moved.add(index)
-
-    return result, set(motif_centers)
-
-
-def point_index(node: Node) -> int:
-    return int(node.id[1:])
-
-
 def choose_data_centers(
     nodes: list[Node],
     point_cols: int,
@@ -556,57 +353,17 @@ def choose_data_centers(
     return interior[:data_cell_count]
 
 
-def choose_ring_indices(nodes: list[Node], center_index: int, spacing: float, seed: int, cell: int) -> list[int]:
-    center = nodes[center_index]
-    phase_rng = random.Random(seed ^ (cell * 0x9E3779B1))
-    phase = phase_rng.uniform(0, math.tau)
-    radius = spacing * phase_rng.uniform(1.15, 1.72)
-    chosen: list[int] = []
-
-    for ring in range(RING_COUNT):
-        angle = phase + ring * math.tau / RING_COUNT
-        target_x = center.x + math.cos(angle) * radius
-        target_y = center.y + math.sin(angle) * radius
-        candidates = sorted(
-            (
-                ((node.x - target_x) ** 2 + (node.y - target_y) ** 2, index)
-                for index, node in enumerate(nodes)
-                if index != center_index and index not in chosen
-            ),
-            key=lambda item: item[0],
-        )
-        chosen.append(candidates[0][1])
-
-    return chosen
-
-
-def nearest_indices(nodes: list[Node], source_index: int, count: int) -> list[int]:
-    source = nodes[source_index]
-    nearest = heapq.nsmallest(
-        count,
-        (
-            ((source.x - target.x) ** 2 + (source.y - target.y) ** 2, target_index)
-            for target_index, target in enumerate(nodes)
-            if target_index != source_index
-        ),
-    )
-    return [index for _distance, index in nearest]
-
-
 def build_graph(
     text: str,
     *,
-    cols: int | None = None,
     cell_size: float = 52.0,
     min_cells: int = 120,
     padding: int = 24,
-    style_json: Path | None = None,
     unit_range: int = 2,
     variant_strength: float = 0.75,
 ) -> Graph:
     header, tail, seed, _normalized = make_parts(text)
     pad_rng = random.Random(seed ^ 0x517CC1B727220A95)
-    mesh_rng = random.Random(seed ^ MESH_XOR)
 
     header_nibbles = bytes_to_nibbles(header)
     tail_nibbles = bytes_to_nibbles(tail)
@@ -621,26 +378,19 @@ def build_graph(
     for nibble, cell in zip(tail_nibbles, data_cells):
         nibbles[cell] = nibble
 
-    style_visual_edges: dict[tuple[str, str], float] = {}
-    unit_incident: dict[int, list[int]] = {}
-    if style_json is not None:
-        nodes, round_motif_centers, style_visual_edges, _style_width, _style_height = load_style_template(style_json)
-        point_cols = 0
-        point_rows = 0
-    else:
-        effective_unit_range = unit_range
-        while True:
-            nodes, round_motif_centers, style_visual_edges, unit_incident = make_unit_distance_substrate(
-                effective_unit_range,
-                cell_size,
-                seed,
-                variant_strength,
-            )
-            if len(round_motif_centers) >= data_cell_count:
-                break
-            effective_unit_range += 1
-        point_cols = 0
-        point_rows = 0
+    effective_unit_range = unit_range
+    while True:
+        nodes, round_motif_centers, style_visual_edges, unit_incident = make_unit_distance_substrate(
+            effective_unit_range,
+            cell_size,
+            seed,
+            variant_strength,
+        )
+        if len(round_motif_centers) >= data_cell_count:
+            break
+        effective_unit_range += 1
+    point_cols = 0
+    point_rows = 0
     center_indices = choose_data_centers(
         nodes,
         point_cols,
@@ -653,103 +403,24 @@ def build_graph(
     visual_edges: dict[tuple[str, str], float] = dict(style_visual_edges)
     data_edges: list[Edge] = []
 
-    if style_json is not None:
-        synthetic_cover_scale = 0.40
-        for source_index in range(len(nodes)):
-            near = nearest_indices(nodes, source_index, 10)
-            for rank, target_index in enumerate(near[:7]):
-                chance = 0.82 - rank * 0.055
-                if mesh_rng.random() < chance:
-                    add_visual_edge(
-                        visual_edges,
-                        nodes[source_index].id,
-                        nodes[target_index].id,
-                        mesh_rng.uniform(0.20, 0.44) * synthetic_cover_scale,
-                    )
-
     for cell, center_index in enumerate(center_indices):
         center_id = nodes[center_index].id
-        if unit_incident:
-            neighbor_indices = unit_incident[center_index]
-            if len(neighbor_indices) < 8:
-                neighbor_indices = nearest_indices(nodes, center_index, 8)
-            nibble = nibbles[cell]
-            for slot in range(4):
-                bit = (nibble >> (3 - slot)) & 1
-                pair = (neighbor_indices[(2 * slot) % len(neighbor_indices)], neighbor_indices[(2 * slot + 1) % len(neighbor_indices)])
-                for candidate_bit, neighbor_index in enumerate(pair):
-                    weight = DATA_STRONG_WEIGHT if candidate_bit == bit else DATA_WEAK_WEIGHT
-                    data_edges.append(
-                        Edge(
-                            center_id,
-                            nodes[neighbor_index].id,
-                            weight,
-                            data_cell=cell,
-                            data_slot=slot,
-                            data_bit=candidate_bit,
-                        )
-                    )
-            continue
-
-        ring_indices = choose_ring_indices(nodes, center_index, cell_size, seed, cell)
-        ring_ids = [nodes[index].id for index in ring_indices]
-        # The visual bloom is made from shared lattice points, not separate
-        # satellite nodes. That keeps the orange dots evenly distributed.
-        is_round_motif = center_index in round_motif_centers
-        motif_indices = nearest_indices(nodes, center_index, 12 if is_round_motif else 8)
-        motif_indices.sort(key=lambda index: math.atan2(nodes[index].y - nodes[center_index].y, nodes[index].x - nodes[center_index].x))
-        for motif_index in motif_indices:
-            if mesh_rng.random() < (0.90 if is_round_motif else 0.56):
-                add_visual_edge(
-                    visual_edges,
-                    center_id,
-                    nodes[motif_index].id,
-                    mesh_rng.uniform(0.50, 0.76) if is_round_motif else mesh_rng.uniform(0.24, 0.44),
-                )
-        for ring in range(len(motif_indices)):
-            if mesh_rng.random() < (0.58 if is_round_motif else 0.28):
-                add_visual_edge(
-                    visual_edges,
-                    nodes[motif_indices[ring]].id,
-                    nodes[motif_indices[(ring + 1) % len(motif_indices)]].id,
-                    mesh_rng.uniform(0.28, 0.46) if is_round_motif else mesh_rng.uniform(0.16, 0.32),
-                )
-            if mesh_rng.random() < (0.34 if is_round_motif else 0.12):
-                add_visual_edge(
-                    visual_edges,
-                    nodes[motif_indices[ring]].id,
-                    nodes[motif_indices[(ring + 2) % len(motif_indices)]].id,
-                    mesh_rng.uniform(0.22, 0.40) if is_round_motif else mesh_rng.uniform(0.14, 0.26),
-                )
-
-        for ring_id in ring_ids:
-            if mesh_rng.random() < (0.46 if is_round_motif else 0.20):
-                add_visual_edge(visual_edges, center_id, ring_id, mesh_rng.uniform(0.28, 0.48))
-        for ring in range(RING_COUNT):
-            if mesh_rng.random() < 0.28:
-                add_visual_edge(
-                    visual_edges,
-                    ring_ids[ring],
-                    ring_ids[(ring + 1) % RING_COUNT],
-                    mesh_rng.uniform(0.18, 0.36),
-                )
-            if mesh_rng.random() < 0.38:
-                add_visual_edge(
-                    visual_edges,
-                    ring_ids[ring],
-                    ring_ids[(ring + 2) % RING_COUNT],
-                    mesh_rng.uniform(0.17, 0.34),
-                )
-
+        neighbor_indices = unit_incident[center_index]
+        if len(neighbor_indices) < 8:
+            raise ValueError("selected data center lacks enough unit-distance neighbors")
         nibble = nibbles[cell]
-        for slot, pair in enumerate(CHORD_PAIRS):
+        for slot in range(4):
             bit = (nibble >> (3 - slot)) & 1
-            for candidate_bit, (a, b) in enumerate(pair):
+            pair = (
+                neighbor_indices[(2 * slot) % len(neighbor_indices)],
+                neighbor_indices[(2 * slot + 1) % len(neighbor_indices)],
+            )
+            for candidate_bit, neighbor_index in enumerate(pair):
                 weight = DATA_STRONG_WEIGHT if candidate_bit == bit else DATA_WEAK_WEIGHT
                 data_edges.append(
                     Edge(
-                        ring_ids[a],
-                        ring_ids[b],
+                        center_id,
+                        nodes[neighbor_index].id,
                         weight,
                         data_cell=cell,
                         data_slot=slot,
@@ -945,15 +616,11 @@ def encode_command(args: argparse.Namespace) -> int:
     else:
         raise SystemExit("encode needs TEXT or --stdin")
 
-    style_json = Path(args.style_json) if args.style_json else None
-
     graph = build_graph(
         text,
-        cols=args.cols,
         cell_size=args.cell_size,
         min_cells=args.min_cells,
         padding=args.padding,
-        style_json=style_json,
         unit_range=args.unit_range,
         variant_strength=args.variant_strength,
     )
@@ -992,11 +659,9 @@ def build_parser() -> argparse.ArgumentParser:
     encode.add_argument("--stdin", action="store_true", help="read text from stdin")
     encode.add_argument("-o", "--output", default="encoded.svg", help="output SVG path")
     encode.add_argument("--json", help="also write a JSON graph file")
-    encode.add_argument("--cols", type=int, help="number of point-field columns")
     encode.add_argument("--cell-size", type=float, default=52.0, help="unit-distance scale in SVG units")
     encode.add_argument("--min-cells", type=int, default=120, help="minimum encoded cells, including padding")
     encode.add_argument("--padding", type=int, default=24, help="extra random padding cells after the packet")
-    encode.add_argument("--style-json", help="reference analysis JSON to use as the visual substrate")
     encode.add_argument("--unit-range", type=int, default=2, help="coefficient range N for a,b,c,d in {-N,...,N}")
     encode.add_argument("--edge-color", default="#2730ff", help="SVG color for graph edges")
     encode.add_argument("--node-color", default="#f39a18", help="SVG fill color for graph vertices")
