@@ -52,6 +52,12 @@ for every mode because the recoverable data is stored in weighted graph edges.
 
 Generation modes:
 
+| Mode | Point set | Typical use |
+| --- | --- | --- |
+| `glyph` | Seeded text-varying coefficient window. | Default visual glyphs with stronger phrase-to-phrase variation. |
+| `norm` | `a,b,c,d in {-N,...,N}` and `|a + bi + c rho + d i rho| < R`. | Matches the first bounded-norm graph variant. |
+| `double-norm` | `|a + bi + c rho + d i rho| < R` and `|a - bi + c rho - d i rho| < R2`. | Matches the later two-embedding graph variant. |
+
 ```bash
 # 1. Text-varying glyph mode.
 python3 graph_cipher.py encode "text" -o glyph.svg --mode glyph
@@ -75,17 +81,49 @@ stable interface.
 
 ### You Are Loved Immensely
 
+#### Glyph
+
 [SVG](examples/you_are_loved_immensely.svg) |
 [PNG](examples/you_are_loved_immensely.png)
 
 ![you are loved immensely](examples/you_are_loved_immensely.png)
 
+#### Norm
+
+[SVG](examples/you_are_loved_immensely_norm.svg) |
+[PNG](examples/you_are_loved_immensely_norm.png)
+
+![you are loved immensely norm](examples/you_are_loved_immensely_norm.png)
+
+#### Double Norm
+
+[SVG](examples/you_are_loved_immensely_double_norm.svg) |
+[PNG](examples/you_are_loved_immensely_double_norm.png)
+
+![you are loved immensely double norm](examples/you_are_loved_immensely_double_norm.png)
+
 ### Goblins
+
+#### Glyph
 
 [SVG](examples/goblins.svg) |
 [PNG](examples/goblins.png)
 
 ![goblins](examples/goblins.png)
+
+#### Norm
+
+[SVG](examples/goblins_norm.svg) |
+[PNG](examples/goblins_norm.png)
+
+![goblins norm](examples/goblins_norm.png)
+
+#### Double Norm
+
+[SVG](examples/goblins_double_norm.svg) |
+[PNG](examples/goblins_double_norm.png)
+
+![goblins double norm](examples/goblins_double_norm.png)
 
 ### Meditations On Moloch
 
