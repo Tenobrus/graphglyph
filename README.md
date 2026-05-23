@@ -55,10 +55,16 @@ Point-set windows:
 # Default text-varying glyph window.
 python3 graph_cipher.py encode "text" -o seeded.svg --window seeded
 
-# Sawin/Nature-style bounded complex norm:
+# Single bounded complex norm:
 # a,b,c,d in {-N,...,N}, z = a + bi + c rho + d i rho, |z| < R.
 python3 graph_cipher.py encode "text" -o norm.svg \
   --window norm --unit-range 2 --norm-radius 4
+
+# Two-embedding norm window:
+# |a + bi + c rho + d i rho| < R and |a - bi + c rho - d i rho| < R2.
+# R2 defaults to R; set --dual-norm-radius for asymmetric bounds.
+python3 graph_cipher.py encode "text" -o double_norm.svg \
+  --window double-norm --unit-range 4 --norm-radius 4
 
 # Exact finite coefficient box with no seeded shape variation.
 python3 graph_cipher.py encode "text" -o box.svg --window box --unit-range 2

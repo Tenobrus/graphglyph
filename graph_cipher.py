@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Iterable
 
 
-WINDOW_CHOICES = ("seeded", "norm", "bounded-norm", "box")
+WINDOW_CHOICES = ("seeded", "norm", "bounded-norm", "double-norm", "two-norm", "box")
 SCHEME = "lattice-bloom-v2"
 MAGIC = b"LBM2"
 VERSION = 2
@@ -179,6 +179,11 @@ def exact_rho_basis() -> list[complex]:
     return [1.0 + 0.0j, 1j, rho, 1j * rho]
 
 
+def dual_rho_basis() -> list[complex]:
+    rho = complex(-0.5, math.sqrt(3.0) / 2.0)
+    return [1.0 + 0.0j, -1j, rho, -1j * rho]
+
+
 def make_projection_basis(seed: int, variant_strength: float) -> list[complex]:
     strength = max(0.0, min(1.0, variant_strength))
     if strength <= 1e-9:
@@ -268,7 +273,30 @@ def choose_norm_coefficients(
 ) -> list[tuple[int, ...]]:
     if norm_radius <= 0:
         raise ValueError("--norm-radius must be positive")
-    return [coeffs for coeffs in coefficient_box(range_limit, len(basis)) if abs(project_coeffs(coeffs, basis)) < norm_radius]
+    return [
+        coeffs
+        for coeffs in coefficient_box(range_limit, len(basis))
+        if abs(project_coeffs(coeffs, basis)) < norm_radius
+    ]
+
+
+def choose_double_norm_coefficients(
+    range_limit: int,
+    basis: list[complex],
+    norm_radius: float,
+    dual_norm_radius: float,
+) -> list[tuple[int, ...]]:
+    if norm_radius <= 0:
+        raise ValueError("--norm-radius must be positive")
+    if dual_norm_radius <= 0:
+        raise ValueError("--dual-norm-radius must be positive")
+    dual_basis = dual_rho_basis()
+    return [
+        coeffs
+        for coeffs in coefficient_box(range_limit, len(basis))
+        if abs(project_coeffs(coeffs, basis)) < norm_radius
+        and abs(project_coeffs(coeffs, dual_basis)) < dual_norm_radius
+    ]
 
 
 def choose_window_coefficients(
@@ -277,6 +305,7 @@ def choose_window_coefficients(
     seed: int,
     variant_strength: float,
     norm_radius: float,
+    dual_norm_radius: float | None,
 ) -> tuple[list[complex], list[tuple[int, ...]], float]:
     if window == "seeded":
         strength = max(0.0, min(1.0, variant_strength))
@@ -285,6 +314,10 @@ def choose_window_coefficients(
     if window in {"norm", "bounded-norm"}:
         basis = exact_rho_basis()
         return basis, choose_norm_coefficients(range_limit, basis, norm_radius), 0.0
+    if window in {"double-norm", "two-norm"}:
+        basis = exact_rho_basis()
+        second_radius = norm_radius if dual_norm_radius is None else dual_norm_radius
+        return basis, choose_double_norm_coefficients(range_limit, basis, norm_radius, second_radius), 0.0
     if window == "box":
         basis = exact_rho_basis()
         return basis, coefficient_box(range_limit, len(basis)), 0.0
@@ -310,8 +343,18 @@ def make_unit_distance_substrate(
     window: str,
     variant_strength: float,
     norm_radius: float,
+    dual_norm_radius: float | None,
 ) -> tuple[list[Node], set[int], dict[tuple[str, str], float], dict[int, list[int]]]:
-    basis, coefficients, visual_strength = choose_window_coefficients(window, range_limit, seed, variant_strength, norm_radius)
+    basis, coefficients, visual_strength = choose_window_coefficients(
+        window,
+        range_limit,
+        seed,
+        variant_strength,
+        norm_radius,
+        dual_norm_radius,
+    )
+    if not coefficients:
+        raise ValueError("coefficient window produced no points")
     raw_points: list[tuple[float, float, tuple[int, ...]]] = []
     seen: set[tuple[float, float]] = set()
     for coeffs in coefficients:
@@ -402,6 +445,7 @@ def build_graph(
     unit_range: int = 2,
     window: str = "seeded",
     norm_radius: float = 4.0,
+    dual_norm_radius: float | None = None,
     variant_strength: float = 0.75,
 ) -> Graph:
     header, tail, seed, _normalized = make_parts(text)
@@ -421,6 +465,7 @@ def build_graph(
         nibbles[cell] = nibble
 
     effective_unit_range = unit_range
+    previous_node_count = -1
     while True:
         nodes, round_motif_centers, style_visual_edges, unit_incident = make_unit_distance_substrate(
             effective_unit_range,
@@ -429,9 +474,16 @@ def build_graph(
             window,
             variant_strength,
             norm_radius,
+            dual_norm_radius,
         )
         if len(round_motif_centers) >= data_cell_count:
             break
+        if window in {"norm", "bounded-norm", "double-norm", "two-norm"} and len(nodes) == previous_node_count:
+            raise ValueError(
+                "bounded coefficient window does not have enough high-degree points; "
+                "increase --norm-radius or use fewer data cells"
+            )
+        previous_node_count = len(nodes)
         effective_unit_range += 1
     point_cols = 0
     point_rows = 0
@@ -668,6 +720,7 @@ def encode_command(args: argparse.Namespace) -> int:
         unit_range=args.unit_range,
         window=args.window,
         norm_radius=args.norm_radius,
+        dual_norm_radius=args.dual_norm_radius,
         variant_strength=args.variant_strength,
     )
     output = Path(args.output)
@@ -713,9 +766,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--window",
         choices=WINDOW_CHOICES,
         default="seeded",
-        help="coefficient window: seeded text-varying default, norm/bounded-norm for |z| < R, or box for the exact finite box",
+        help=(
+            "coefficient window: seeded text-varying default, norm/bounded-norm for |z| < R, "
+            "double-norm/two-norm for two embedding bounds, or box for the exact finite box"
+        ),
     )
-    encode.add_argument("--norm-radius", type=float, default=4.0, help="radius R used by --window norm")
+    encode.add_argument("--norm-radius", type=float, default=4.0, help="first embedding radius R used by norm windows")
+    encode.add_argument(
+        "--dual-norm-radius",
+        type=float,
+        help="second embedding radius used by --window double-norm; defaults to --norm-radius",
+    )
     encode.add_argument("--edge-color", default="#2730ff", help="SVG color for graph edges")
     encode.add_argument("--node-color", default="#f39a18", help="SVG fill color for graph vertices")
     encode.add_argument("--node-stroke-color", default="#d67900", help="SVG outline color for graph vertices")
